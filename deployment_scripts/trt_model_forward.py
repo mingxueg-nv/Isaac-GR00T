@@ -42,6 +42,24 @@ def eagle_tensorrt_forward(self, vl_input):
     self.vit_engine.set_runtime_tensor_shape("pixel_values", vl_input["pixel_values"].shape)
     self.vit_engine.set_runtime_tensor_shape("position_ids", position_ids.shape)
     vit_embeds = self.vit_engine(vl_input["pixel_values"], position_ids)["vit_embeds"]
+    
+    print(f"DEBUG VIT OUTPUT: vit_embeds.shape = {vit_embeds.shape}")
+    
+    # FIX: Handle dual camera like PyTorch original model
+    # Concatenate dual camera features in sequence dimension, not batch dimension
+    if vit_embeds.shape[0] == 2:
+        print(f"DEBUG: Dual camera detected, concatenating in sequence dimension")
+        # [2, 256, 1152] -> [1, 512, 1152] (concatenate in sequence dimension)
+        B, N, C = vit_embeds.shape
+        vit_embeds = vit_embeds.view(1, B * N, C)
+        print(f"DEBUG: After concatenation: vit_embeds.shape = {vit_embeds.shape}")
+        
+        # Keep input_ids and attention_mask as batch size 1
+        # This matches PyTorch behavior where text is batch=1 but vision tokens are concatenated
+    
+    print(f"DEBUG LLM INPUT: input_ids.shape = {vl_input['input_ids'].shape}")
+    print(f"DEBUG LLM INPUT: attention_mask.shape = {vl_input['attention_mask'].shape}")
+    print(f"DEBUG LLM INPUT: vit_embeds.shape = {vit_embeds.shape}")
 
     self.llm_engine.set_runtime_tensor_shape("input_ids", vl_input["input_ids"].shape)
     self.llm_engine.set_runtime_tensor_shape("vit_embeds", vit_embeds.shape)
@@ -70,7 +88,7 @@ def action_head_tensorrt_forward(self, backbone_output, action_input):
     )["output"]
     vl_embeds = backbone_output.backbone_features
     embodiment_id = action_input.embodiment_id
-    batch_size = vl_embeds.shape[0]
+    batch_size = vl_embeds.shape[0]  # Should be 1 now after concatenation
 
     if action_input.state.dtype != torch.float16:
         action_input.state = action_input.state.to(torch.float16)
@@ -82,7 +100,7 @@ def action_head_tensorrt_forward(self, backbone_output, action_input):
         vl_embeds = vl_embeds.to(torch.float16)
 
     # Embed state with batch processing
-
+    print(f"DEBUG: State encoder input - state: {action_input.state.shape}, embodiment_id: {embodiment_id.shape}")
     self.state_encoder_engine.set_runtime_tensor_shape("state", action_input.state.shape)
     self.state_encoder_engine.set_runtime_tensor_shape("embodiment_id", embodiment_id.shape)
     state_features = self.state_encoder_engine(action_input.state, embodiment_id)["output"]
@@ -145,6 +163,7 @@ def action_head_tensorrt_forward(self, backbone_output, action_input):
 
         # Update actions using euler integration.
         actions = actions + dt * pred_velocity
+    
     return BatchFeature(data={"action_pred": actions})
 
 
@@ -200,3 +219,4 @@ def setup_tensorrt_engines(policy, trt_engine_path):
     policy.model.action_head.get_action = partial(
         action_head_tensorrt_forward, policy.model.action_head
     )
+    

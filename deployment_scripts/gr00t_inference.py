@@ -18,6 +18,8 @@ import os
 from functools import partial
 
 import torch
+import time
+import numpy as np
 from action_head_utils import action_head_pytorch_forward
 from trt_model_forward import setup_tensorrt_engines
 
@@ -94,7 +96,7 @@ def compare_predictions(pred_tensorrt, pred_torch):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run GR00T inference")
     parser.add_argument(
-        "--model_path", type=str, default="nvidia/GR00T-N1.5-3B", help="Path to the GR00T model"
+        "--model_path", type=str, default="checkpoints/mixed_sim_real/checkpoint-30000", help="Path to the GR00T model"
     )
     parser.add_argument(
         "--inference_mode",
@@ -115,16 +117,30 @@ if __name__ == "__main__":
         help="Path to the TensorRT engine",
         default="gr00t_engine",
     )
+    parser.add_argument(
+        "--num_warmup_runs",
+        type=int,
+        help="Number of warmup runs for TensorRT inference",
+        default=3,
+    )
+    parser.add_argument(
+        "--num_profile_runs",
+        type=int,
+        help="Number of profiling runs for TensorRT inference",
+        default=10,
+    )
+
     args = parser.parse_args()
 
     MODEL_PATH = args.model_path
     REPO_PATH = os.path.dirname(os.path.dirname(gr00t.__file__))
-    DATASET_PATH = os.path.join(REPO_PATH, "demo_data/robot_sim.PickNPlace")
-    EMBODIMENT_TAG = "gr1"
+    DATASET_PATH = "datasets/sim/sim_enhance_camera_70"
+    EMBODIMENT_TAG = "new_embodiment"
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    data_config = DATA_CONFIG_MAP["fourier_gr1_arms_only"]
+    data_config = DATA_CONFIG_MAP["so100_dualcam"]
+    data_config.video_keys = ["video.room", "video.wrist"]
     modality_config = data_config.modality_config()
     modality_transform = data_config.transform()
 
@@ -141,16 +157,52 @@ if __name__ == "__main__":
     dataset = LeRobotSingleDataset(
         dataset_path=DATASET_PATH,
         modality_configs=modality_config,
-        video_backend="decord",
+        video_backend="torchvision_av",
         video_backend_kwargs=None,
         transforms=None,  # We'll handle transforms separately through the policy
         embodiment_tag=EMBODIMENT_TAG,
     )
 
     step_data = dataset[0]
+    
 
     if args.inference_mode == "pytorch":
-        predicted_action = policy.get_action(step_data)
+        # Warmup runs
+        print(f"Performing {args.num_warmup_runs} warmup runs...")
+        for i in range(args.num_warmup_runs):
+            _ = policy.get_action(step_data)
+        
+        # Timed inference runs
+        num_runs = args.num_profile_runs
+        inference_times = []
+        
+        print(f"\nRunning {num_runs} timed inference runs...")
+        for i in range(num_runs):
+            torch.cuda.synchronize()  # Ensure GPU operations are complete
+            start_time = time.perf_counter()
+            
+            predicted_action = policy.get_action(step_data)
+            
+            torch.cuda.synchronize()  # Ensure GPU operations are complete
+            end_time = time.perf_counter()
+            
+            inference_time = (end_time - start_time) * 1000  # Convert to milliseconds
+            inference_times.append(inference_time)
+            print(f"Run {i+1}: {inference_time:.2f} ms")
+        
+        # Calculate statistics
+        mean_time = np.mean(inference_times)
+        std_time = np.std(inference_times)
+        min_time = np.min(inference_times)
+        max_time = np.max(inference_times)
+        
+        print("\n=== PyTorch Inference Performance ===")
+        print(f"Number of runs: {num_runs}")
+        print(f"Mean inference time: {mean_time:.2f} ± {std_time:.2f} ms")
+        print(f"Min inference time: {min_time:.2f} ms")
+        print(f"Max inference time: {max_time:.2f} ms")
+        print(f"Throughput: {1000/mean_time:.2f} inferences/second")
+        
         print("\n=== PyTorch Inference Results ===")
         for key, value in predicted_action.items():
             print(key, value.shape)
@@ -158,11 +210,47 @@ if __name__ == "__main__":
     elif args.inference_mode == "tensorrt":
         # Setup TensorRT engines
         setup_tensorrt_engines(policy, args.trt_engine_path)
-
-        predicted_action = policy.get_action(step_data)
+        
+        # Warmup runs (TensorRT engines may need warmup for optimal performance)
+        print(f"Performing {args.num_warmup_runs} warmup runs...")
+        for i in range(args.num_warmup_runs):
+            _ = policy.get_action(step_data)
+        
+        # Timed inference runs
+        num_runs = args.num_profile_runs
+        inference_times = []
+        
+        print(f"\nRunning {num_runs} timed inference runs...")
+        for i in range(num_runs):
+            torch.cuda.synchronize()  # Ensure GPU operations are complete
+            start_time = time.perf_counter()
+            
+            predicted_action = policy.get_action(step_data)
+            
+            torch.cuda.synchronize()  # Ensure GPU operations are complete
+            end_time = time.perf_counter()
+            
+            inference_time = (end_time - start_time) * 1000  # Convert to milliseconds
+            inference_times.append(inference_time)
+            print(f"Run {i+1}: {inference_time:.2f} ms")
+        
+        # Calculate statistics
+        mean_time = np.mean(inference_times)
+        std_time = np.std(inference_times)
+        min_time = np.min(inference_times)
+        max_time = np.max(inference_times)
+        
+        print("\n=== TensorRT Inference Performance ===")
+        print(f"Number of runs: {num_runs}")
+        print(f"Mean inference time: {mean_time:.2f} ± {std_time:.2f} ms")
+        print(f"Min inference time: {min_time:.2f} ms")
+        print(f"Max inference time: {max_time:.2f} ms")
+        print(f"Throughput: {1000/mean_time:.2f} inferences/second")
+        
         print("\n=== TensorRT Inference Results ===")
         for key, value in predicted_action.items():
             print(key, value.shape)
+
 
     else:
         # ensure PyTorch and TensorRT have the same init_actions
@@ -184,3 +272,4 @@ if __name__ == "__main__":
 
         # Compare predictions
         compare_predictions(predicted_action_tensorrt, predicted_action_torch)
+      

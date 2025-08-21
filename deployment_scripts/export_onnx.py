@@ -116,12 +116,13 @@ def export_eagle2_vit(vision_model, output_dir):
     model.load_state_dict(vision_model.state_dict())
     model.eval().cuda()
 
+    # Use batch size 2 to support dual camera
     pixel_values = torch.randn(
-        (1, model.config.num_channels, model.config.image_size, model.config.image_size),
+        (2, model.config.num_channels, model.config.image_size, model.config.image_size),
         dtype=torch.float16,
         device="cuda",
     )
-    position_ids = torch.arange(model.embeddings.num_patches, device="cuda").expand((1, -1))
+    position_ids = torch.arange(model.embeddings.num_patches, device="cuda").expand((2, -1))
 
     os.makedirs(output_dir, exist_ok=True)
     with torch.inference_mode():
@@ -207,12 +208,19 @@ def export_eagle2_llm(backbone_model, backbone_config, output_dir, attention_mas
     model.load_state_dict(backbone_model.state_dict())
     model.eval().cuda()
 
+    # Use batch size 1 but support dual camera via sequence concatenation
     input_ids = torch.randint(100, (1, attention_mask.shape[1]), dtype=torch.int64).cuda()
-    input_ids[:, : model.eagle_model.num_image_token] = model.eagle_model.image_token_index
+    # For dual camera, we need 2x image tokens
+    dual_camera_image_tokens = 2 * model.eagle_model.num_image_token
+    print(f"DEBUG: num_image_token = {model.eagle_model.num_image_token}")
+    print(f"DEBUG: dual_camera_image_tokens = {dual_camera_image_tokens}")
+    print(f"DEBUG: attention_mask.shape[1] = {attention_mask.shape[1]}")
+    input_ids[:, : dual_camera_image_tokens] = model.eagle_model.image_token_index
+    # vit_embeds: support dual camera by using 512 (2*256) sequence length
     vit_embeds = torch.randn(
         (
             1,
-            model.eagle_model.vision_model.vision_model.embeddings.num_patches,
+            2 * model.eagle_model.vision_model.vision_model.embeddings.num_patches,  # 2*256 = 512 for dual camera
             model.eagle_model.vision_model.config.hidden_size,
         ),
         dtype=torch.float16,
@@ -229,6 +237,7 @@ def export_eagle2_llm(backbone_model, backbone_config, output_dir, attention_mas
             output_names=["embeddings"],
             opset_version=19,
             do_constant_folding=True,
+            export_params=True,
             dynamic_axes={
                 "input_ids": {0: "batch_size", 1: "sequence_length"},
                 "vit_embeds": {0: "batch_size"},
@@ -389,10 +398,11 @@ def run_groot_inference(
 ) -> Dict[str, float]:
 
     # load the policy
-    data_config = DATA_CONFIG_MAP["fourier_gr1_arms_only"]
+    data_config = DATA_CONFIG_MAP["so100_dualcam"]
+    data_config.video_keys = ["video.room", "video.wrist"]
     modality_config = data_config.modality_config()
     modality_transform = data_config.transform()
-    EMBODIMENT_TAG = "gr1"
+    EMBODIMENT_TAG = "new_embodiment"
     policy = Gr00tPolicy(
         model_path=model_path,
         embodiment_tag=EMBODIMENT_TAG,
@@ -405,13 +415,15 @@ def run_groot_inference(
     dataset = LeRobotSingleDataset(
         dataset_path=dataset_path,
         modality_configs=modality_config,
-        video_backend="decord",
+        video_backend="torchvision_av",
         video_backend_kwargs=None,
         transforms=None,  # We'll handle transforms separately through the policy
         embodiment_tag=EMBODIMENT_TAG,
     )
 
     step_data = dataset[0]
+    # print(step_data)
+    
     # get the action
     predicted_action = policy.get_action(step_data)
 
@@ -437,13 +449,13 @@ if __name__ == "__main__":
         "--dataset_path",
         type=str,
         help="Path to the dataset",
-        default=os.path.join(os.getcwd(), "demo_data/robot_sim.PickNPlace"),
+        default="datasets/sim/sim_enhance_camera_70",
     )
     parser.add_argument(
         "--model_path",
         type=str,
         help="Path to the model",
-        default="nvidia/GR00T-N1.5-3B",
+        default="checkpoints/mixed_sim_real/checkpoint-30000",
     )
 
     parser.add_argument(
@@ -469,3 +481,4 @@ if __name__ == "__main__":
             print(f"{key}: {value.shape}")
         else:
             print(f"{key}: {value}")
+            
