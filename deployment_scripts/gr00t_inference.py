@@ -22,6 +22,7 @@ import time
 import numpy as np
 from action_head_utils import action_head_pytorch_forward
 from trt_model_forward import setup_tensorrt_engines
+from PIL import Image
 
 import gr00t
 from gr00t.data.dataset import LeRobotSingleDataset
@@ -96,14 +97,21 @@ def compare_predictions(pred_tensorrt, pred_torch):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run GR00T inference")
     parser.add_argument(
-        "--model_path", type=str, default="checkpoints/mixed_sim_real/checkpoint-30000", help="Path to the GR00T model"
+        "--model_path", type=str, default="nvidia/GR00T-N1.5-3B", help="Path to the GR00T model"
+    )
+    parser.add_argument(
+        "--dataset_path",
+        type=str,
+        help="Path to the dataset",
+        default="",
     )
     parser.add_argument(
         "--inference_mode",
         type=str,
         choices=["pytorch", "tensorrt", "compare"],
         default="pytorch",
-        help="Inference mode: 'pytorch' for PyTorch inference, 'tensorrt' for TensorRT inference, 'compare' for compare PyTorch and TensorRT outputs similarity",
+        help="Inference mode: 'pytorch' for PyTorch inference, 'tensorrt' for TensorRT inference, "
+             "'compare' for comparing PyTorch and TensorRT outputs similarity",
     )
     parser.add_argument(
         "--denoising_steps",
@@ -127,16 +135,14 @@ if __name__ == "__main__":
         "--num_profile_runs",
         type=int,
         help="Number of profiling runs for TensorRT inference",
-        default=10,
+        default=50,
     )
 
     args = parser.parse_args()
 
     MODEL_PATH = args.model_path
-    REPO_PATH = os.path.dirname(os.path.dirname(gr00t.__file__))
-    DATASET_PATH = "datasets/sim/sim_enhance_camera_70"
     EMBODIMENT_TAG = "new_embodiment"
-
+    dataset_path = args.dataset_path
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     data_config = DATA_CONFIG_MAP["so100_dualcam"]
@@ -154,55 +160,72 @@ if __name__ == "__main__":
     )
 
     modality_config = policy.modality_config
-    dataset = LeRobotSingleDataset(
-        dataset_path=DATASET_PATH,
-        modality_configs=modality_config,
-        video_backend="torchvision_av",
-        video_backend_kwargs=None,
-        transforms=None,  # We'll handle transforms separately through the policy
-        embodiment_tag=EMBODIMENT_TAG,
-    )
 
-    step_data = dataset[0]
-    
+    if dataset_path == "":
+        room_img_array = np.random.randint(0, 256, (480, 640, 3), dtype=np.uint8)
+        room_img = Image.fromarray(room_img_array, "RGB")
+        wrist_img_array = np.random.randint(0, 256, (480, 640, 3), dtype=np.uint8)
+        wrist_img = Image.fromarray(wrist_img_array, "RGB")
+        arm = np.random.randn(5)
+        gripper = np.random.randn(1)
+
+        step_data = {
+            "video.room": np.expand_dims(room_img, axis=0),
+            "video.wrist": np.expand_dims(wrist_img, axis=0),
+            "state.single_arm": np.expand_dims(np.array(arm), axis=0),
+            "state.gripper": np.expand_dims(np.array(gripper), axis=0),
+            "annotation.human.task_description": "Grip the scissors and put it into the tray",
+        }
+    else:
+        dataset = LeRobotSingleDataset(
+            dataset_path=dataset_path,
+            modality_configs=modality_config,
+            video_backend="torchvision_av",
+            video_backend_kwargs=None,
+            transforms=None,  # We'll handle transforms separately through the policy
+            embodiment_tag=EMBODIMENT_TAG,
+        )
+
+        step_data = dataset[0]
+
 
     if args.inference_mode == "pytorch":
         # Warmup runs
         print(f"Performing {args.num_warmup_runs} warmup runs...")
         for i in range(args.num_warmup_runs):
             _ = policy.get_action(step_data)
-        
+
         # Timed inference runs
         num_runs = args.num_profile_runs
         inference_times = []
-        
+
         print(f"\nRunning {num_runs} timed inference runs...")
         for i in range(num_runs):
             torch.cuda.synchronize()  # Ensure GPU operations are complete
             start_time = time.perf_counter()
-            
+
             predicted_action = policy.get_action(step_data)
-            
+
             torch.cuda.synchronize()  # Ensure GPU operations are complete
             end_time = time.perf_counter()
-            
+
             inference_time = (end_time - start_time) * 1000  # Convert to milliseconds
             inference_times.append(inference_time)
             print(f"Run {i+1}: {inference_time:.2f} ms")
-        
+
         # Calculate statistics
         mean_time = np.mean(inference_times)
         std_time = np.std(inference_times)
         min_time = np.min(inference_times)
         max_time = np.max(inference_times)
-        
+
         print("\n=== PyTorch Inference Performance ===")
         print(f"Number of runs: {num_runs}")
         print(f"Mean inference time: {mean_time:.2f} ± {std_time:.2f} ms")
         print(f"Min inference time: {min_time:.2f} ms")
         print(f"Max inference time: {max_time:.2f} ms")
         print(f"Throughput: {1000/mean_time:.2f} inferences/second")
-        
+
         print("\n=== PyTorch Inference Results ===")
         for key, value in predicted_action.items():
             print(key, value.shape)
@@ -210,43 +233,43 @@ if __name__ == "__main__":
     elif args.inference_mode == "tensorrt":
         # Setup TensorRT engines
         setup_tensorrt_engines(policy, args.trt_engine_path)
-        
+
         # Warmup runs (TensorRT engines may need warmup for optimal performance)
         print(f"Performing {args.num_warmup_runs} warmup runs...")
         for i in range(args.num_warmup_runs):
             _ = policy.get_action(step_data)
-        
+
         # Timed inference runs
         num_runs = args.num_profile_runs
         inference_times = []
-        
+
         print(f"\nRunning {num_runs} timed inference runs...")
         for i in range(num_runs):
             torch.cuda.synchronize()  # Ensure GPU operations are complete
             start_time = time.perf_counter()
-            
+
             predicted_action = policy.get_action(step_data)
-            
+
             torch.cuda.synchronize()  # Ensure GPU operations are complete
             end_time = time.perf_counter()
-            
+
             inference_time = (end_time - start_time) * 1000  # Convert to milliseconds
             inference_times.append(inference_time)
             print(f"Run {i+1}: {inference_time:.2f} ms")
-        
+
         # Calculate statistics
         mean_time = np.mean(inference_times)
         std_time = np.std(inference_times)
         min_time = np.min(inference_times)
         max_time = np.max(inference_times)
-        
+
         print("\n=== TensorRT Inference Performance ===")
         print(f"Number of runs: {num_runs}")
         print(f"Mean inference time: {mean_time:.2f} ± {std_time:.2f} ms")
         print(f"Min inference time: {min_time:.2f} ms")
         print(f"Max inference time: {max_time:.2f} ms")
         print(f"Throughput: {1000/mean_time:.2f} inferences/second")
-        
+
         print("\n=== TensorRT Inference Results ===")
         for key, value in predicted_action.items():
             print(key, value.shape)
@@ -272,4 +295,3 @@ if __name__ == "__main__":
 
         # Compare predictions
         compare_predictions(predicted_action_tensorrt, predicted_action_torch)
-      

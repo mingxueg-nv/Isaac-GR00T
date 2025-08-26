@@ -27,6 +27,7 @@ from transformers.models.siglip.modeling_siglip import (
     SiglipVisionEmbeddings,
     SiglipVisionTransformer,
 )
+from PIL import Image
 
 from gr00t.data.dataset import LeRobotSingleDataset
 from gr00t.experiment.data_config import DATA_CONFIG_MAP
@@ -411,18 +412,33 @@ def run_groot_inference(
         device=device,
     )
     modality_config = policy.modality_config
-    # load the dataset
-    dataset = LeRobotSingleDataset(
-        dataset_path=dataset_path,
-        modality_configs=modality_config,
-        video_backend="torchvision_av",
-        video_backend_kwargs=None,
-        transforms=None,  # We'll handle transforms separately through the policy
-        embodiment_tag=EMBODIMENT_TAG,
-    )
 
-    step_data = dataset[0]
-    # print(step_data)
+    if dataset_path == "":
+        room_img_array = np.random.randint(0, 256, (480, 640, 3), dtype=np.uint8)
+        room_img = Image.fromarray(room_img_array, "RGB")
+        wrist_img_array = np.random.randint(0, 256, (480, 640, 3), dtype=np.uint8)
+        wrist_img = Image.fromarray(wrist_img_array, "RGB")
+        arm = np.random.randn(5)
+        gripper = np.random.randn(1)
+
+        step_data = {
+            "video.room": np.expand_dims(room_img, axis=0),
+            "video.wrist": np.expand_dims(wrist_img, axis=0),
+            "state.single_arm": np.expand_dims(np.array(arm), axis=0),
+            "state.gripper": np.expand_dims(np.array(gripper), axis=0),
+            "annotation.human.task_description": "Grip the scissors and put it into the tray",
+        }
+    else:
+        dataset = LeRobotSingleDataset(
+            dataset_path=dataset_path,
+            modality_configs=modality_config,
+            video_backend="torchvision_av",
+            video_backend_kwargs=None,
+            transforms=None,  # We'll handle transforms separately through the policy
+            embodiment_tag=EMBODIMENT_TAG,
+        )
+
+        step_data = dataset[0]
     
     # get the action
     predicted_action = policy.get_action(step_data)
