@@ -16,7 +16,7 @@
 #!/bin/bash
 echo "Important Notes:"
 echo "1: The max batch of engine size is set to 8 in the reference case. "
-echo "2: The MIN_LEN/OPT_LEN/MAX_LEN for LLM, DiT, VLLN-VLSelfAttention models is set to 80/283/300."
+echo "2: The MIN_LEN/OPT_LEN/MAX_LEN for LLM, DiT, VLLN-VLSelfAttention models is set to 100/600/1200."
 echo "If your inference batch size exceeds 8 or the MIN_LEN/OPT_LEN/MAX_LEN for LLM, DiT, VLLN-VLSelfAttention not fit your use case, please set it to your actual batch size and length variables."
 
 export PATH=/usr/src/tensorrt/bin:$PATH

@@ -465,7 +465,7 @@ if __name__ == "__main__":
         "--dataset_path",
         type=str,
         help="Path to the dataset",
-        default="datasets/sim/sim_enhance_camera_70",
+        default="",
     )
     parser.add_argument(
         "--model_path",
