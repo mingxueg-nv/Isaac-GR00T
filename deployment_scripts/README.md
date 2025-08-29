@@ -77,7 +77,7 @@ pip install -e .[orin]
 ```
 
 ```sh
-export PYTHONPATH=/mnt/Isaac-GR00T:$PYTHONPATH
+export PYTHONPATH=/mnt/Isaac-GR00T/gr00t/eval:$PYTHONPATH
 ```
 
 ```sh
@@ -90,7 +90,7 @@ python scripts/inference_service_trt.py --server \
 # inference request, scissor
 python getting_started/examples/eval_lerobot.py \
     --robot.type=so101_follower \
-    --robot.port=/dev/ttyACM0 \
+    --robot.port=/dev/ttyACM1 \
     --robot.id=so101_follower_arm \
     --robot.cameras="{ wrist: {type: opencv, index_or_path: 2, width: 640, height: 480, fps: 30}, room: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
     --policy_host=127.0.0.1 \
