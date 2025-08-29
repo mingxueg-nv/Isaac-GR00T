@@ -53,9 +53,48 @@ docker build -t isaac-gr00t-n1.5:l4t-jp6.2 -f orin.Dockerfile .
 #### Run Container
 
 To run the container:
+```sh
+docker run -it --rm --network=host --privileged --runtime=nvidia \
+    -v /media/binliu/mxgu/Isaac-GR00T:/mnt/Isaac-GR00T \
+    -v /media/binliu/BLSSD/trt/gr00t_engine:/mnt/Isaac-GR00T/gr00t_engine \
+    -v /media/binliu/BLSSD/trt/gr00t_onnx:/mnt/Isaac-GR00T/gr00t_onnx \
+    -v /media/binliu/mxgu/lerobot:/mnt/lerobot \
+    -v /dev:/dev \
+    --workdir /mnt/Isaac-GR00T \
+    -v /media/binliu/BLSSD/checkpoints/:/mnt/Isaac-GR00T/checkpoints \
+    -v /media/binliu/mxgu/so101_follower_arm.json:/root/.cache/huggingface/lerobot/calibration/robots/so101_follower/so101_follower_arm.json \
+    isaac-gr00t-n1.5:l4t-jp6.2  /bin/bash
+```
 
 ```sh
-docker run -it --rm --network=host --runtime=nvidia --volume /mnt:/mnt --workdir /mnt/Isaac-GR00T   isaac-gr00t-n1.5:l4t-jp6.2  /bin/bash
+# lerobot
+pip install -e ".[feetech]"
+```
+
+```sh
+# gr00t
+pip install -e .[orin]
+```
+
+```sh
+export PYTHONPATH=/mnt/Isaac-GR00T:$PYTHONPATH
+```
+
+```sh
+python scripts/inference_service_trt.py --server \
+    --embodiment-tag new_embodiment \
+    --data-config so100_dualcam \
+    --denoising-steps 4 \
+    --model_path /mnt/Isaac-GR00T/checkpoints/checkpoint-30000/
+
+# inference request, scissor
+python getting_started/examples/eval_lerobot.py \
+    --robot.type=so101_follower \
+    --robot.port=/dev/ttyACM0 \
+    --robot.id=so101_follower_arm \
+    --robot.cameras="{ wrist: {type: opencv, index_or_path: 2, width: 640, height: 480, fps: 30}, room: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
+    --policy_host=127.0.0.1 \
+    --lang_instruction="Grip the scissors and put it into the tray"
 ```
 
 ### 2. Inference
