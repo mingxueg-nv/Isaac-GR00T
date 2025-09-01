@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import os
+import time
 from functools import partial
 
 import torch
@@ -41,32 +42,42 @@ def eagle_tensorrt_forward(self, vl_input):
 
     self.vit_engine.set_runtime_tensor_shape("pixel_values", vl_input["pixel_values"].shape)
     self.vit_engine.set_runtime_tensor_shape("position_ids", position_ids.shape)
-    vit_embeds = self.vit_engine(vl_input["pixel_values"], position_ids)["vit_embeds"]
     
-    print(f"DEBUG VIT OUTPUT: vit_embeds.shape = {vit_embeds.shape}")
+    # VLM - ViT timing (only engine execution, not tensor shape setting)
+    start_time = time.time()
+    vit_embeds = self.vit_engine(vl_input["pixel_values"], position_ids)["vit_embeds"]
+    vit_time = (time.time() - start_time) * 1000  # Convert to ms
+    print(f"VLM - ViT: {vit_time:.2f} ms FP16")
+    
+    # print(f"DEBUG VIT OUTPUT: vit_embeds.shape = {vit_embeds.shape}")
     
     # FIX: Handle dual camera like PyTorch original model
     # Concatenate dual camera features in sequence dimension, not batch dimension
     if vit_embeds.shape[0] == 2:
-        print(f"DEBUG: Dual camera detected, concatenating in sequence dimension")
+        # print(f"DEBUG: Dual camera detected, concatenating in sequence dimension")
         # [2, 256, 1152] -> [1, 512, 1152] (concatenate in sequence dimension)
         B, N, C = vit_embeds.shape
         vit_embeds = vit_embeds.view(1, B * N, C)
-        print(f"DEBUG: After concatenation: vit_embeds.shape = {vit_embeds.shape}")
+        # print(f"DEBUG: After concatenation: vit_embeds.shape = {vit_embeds.shape}")
         
         # Keep input_ids and attention_mask as batch size 1
         # This matches PyTorch behavior where text is batch=1 but vision tokens are concatenated
     
-    print(f"DEBUG LLM INPUT: input_ids.shape = {vl_input['input_ids'].shape}")
-    print(f"DEBUG LLM INPUT: attention_mask.shape = {vl_input['attention_mask'].shape}")
-    print(f"DEBUG LLM INPUT: vit_embeds.shape = {vit_embeds.shape}")
+    # print(f"DEBUG LLM INPUT: input_ids.shape = {vl_input['input_ids'].shape}")
+    # print(f"DEBUG LLM INPUT: attention_mask.shape = {vl_input['attention_mask'].shape}")
+    # print(f"DEBUG LLM INPUT: vit_embeds.shape = {vit_embeds.shape}")
 
     self.llm_engine.set_runtime_tensor_shape("input_ids", vl_input["input_ids"].shape)
     self.llm_engine.set_runtime_tensor_shape("vit_embeds", vit_embeds.shape)
     self.llm_engine.set_runtime_tensor_shape("attention_mask", vl_input["attention_mask"].shape)
+    
+    # VLM - LLM timing (only engine execution, not tensor shape setting)
+    start_time = time.time()
     embeddings = self.llm_engine(vl_input["input_ids"], vit_embeds, vl_input["attention_mask"])[
         "embeddings"
     ]
+    llm_time = (time.time() - start_time) * 1000  # Convert to ms
+    print(f"VLM - LLM: {llm_time:.2f} ms FP16")
 
     return BatchFeature(
         data={
@@ -77,15 +88,28 @@ def eagle_tensorrt_forward(self, vl_input):
 
 
 def action_head_tensorrt_forward(self, backbone_output, action_input):
-    # backbone_output = self.process_backbone_output(backbone_output)
+    # Action_Head - process_backbone_output timing
+    start_time = time.time()
+    
+    # Include all processing steps in process_backbone_output timing
+    # 1. dtype conversion
     if backbone_output.backbone_features.dtype != torch.float16:
         backbone_output.backbone_features = backbone_output.backbone_features.to(torch.float16)
+    
+    # 2. vlln_vl_self_attention processing
     self.vlln_vl_self_attention_engine.set_runtime_tensor_shape(
         "backbone_features", backbone_output.backbone_features.shape
     )
     backbone_output.backbone_features = self.vlln_vl_self_attention_engine(
         backbone_output.backbone_features
     )["output"]
+    
+    # 3. Additional processing that might be needed
+    # (This should match what PyTorch's process_backbone_output does)
+    
+    process_time = (time.time() - start_time) * 1000  # Convert to ms
+    print(f"Action_Head - process_backbone_output: {process_time:.2f} ms FP16")
+    
     vl_embeds = backbone_output.backbone_features
     embodiment_id = action_input.embodiment_id
     batch_size = vl_embeds.shape[0]  # Should be 1 now after concatenation
@@ -99,11 +123,15 @@ def action_head_tensorrt_forward(self, backbone_output, action_input):
     if vl_embeds.dtype != torch.float16:
         vl_embeds = vl_embeds.to(torch.float16)
 
-    # Embed state with batch processing
-    print(f"DEBUG: State encoder input - state: {action_input.state.shape}, embodiment_id: {embodiment_id.shape}")
+    # Action_Head - state_encoder timing (only engine execution, not tensor shape setting)
+    # print(f"DEBUG: State encoder input - state: {action_input.state.shape}, embodiment_id: {embodiment_id.shape}")
     self.state_encoder_engine.set_runtime_tensor_shape("state", action_input.state.shape)
     self.state_encoder_engine.set_runtime_tensor_shape("embodiment_id", embodiment_id.shape)
+    
+    start_time = time.time()
     state_features = self.state_encoder_engine(action_input.state, embodiment_id)["output"]
+    state_encoder_time = (time.time() - start_time) * 1000  # Convert to ms
+    print(f"Action_Head - state_encoder: {state_encoder_time:.2f} ms FP16")
 
     # Set initial actions as the sampled noise.
     device = vl_embeds.device
@@ -127,14 +155,20 @@ def action_head_tensorrt_forward(self, backbone_output, action_input):
         # Embed noised action trajectory with batch processing
         timesteps_tensor = torch.full(size=(batch_size,), fill_value=t_discretized, device=device)
 
+        # Action_Head - action_encoder timing (only engine execution, not tensor shape setting)
         self.action_encoder_engine.set_runtime_tensor_shape("actions", actions.shape)
         self.action_encoder_engine.set_runtime_tensor_shape(
             "timesteps_tensor", timesteps_tensor.shape
         )
         self.action_encoder_engine.set_runtime_tensor_shape("embodiment_id", embodiment_id.shape)
+        
+        start_time = time.time()
         action_features = self.action_encoder_engine(actions, timesteps_tensor, embodiment_id)[
             "output"
         ]
+        action_encoder_time = (time.time() - start_time) * 1000  # Convert to ms
+        if t == 0:  # Only print once to avoid spam
+            print(f"Action_Head - action_encoder: {action_encoder_time:.2f} ms FP16")
 
         # Maybe add position embedding.
         if self.config.add_pos_embed:
@@ -151,15 +185,27 @@ def action_head_tensorrt_forward(self, backbone_output, action_input):
         if vl_embs.dtype != torch.float16:
             vl_embs = vl_embs.to(torch.float16)
 
+        # Action_Head - DiT timing (only engine execution, not tensor shape setting)
         self.DiT_engine.set_runtime_tensor_shape("vl_embs", vl_embs.shape)
         self.DiT_engine.set_runtime_tensor_shape("sa_embs", sa_embs.shape)
         self.DiT_engine.set_runtime_tensor_shape("timesteps_tensor", timesteps_tensor.shape)
+        
+        start_time = time.time()
         model_output = self.DiT_engine(sa_embs, vl_embs, timesteps_tensor)["output"]
+        dit_time = (time.time() - start_time) * 1000  # Convert to ms
+        if t == 0:  # Only print once to avoid spam
+            print(f"Action_Head - DiT: {dit_time:.2f} ms FP16")
 
+        # Action_Head - action_decoder timing (only engine execution, not tensor shape setting)
         self.action_decoder_engine.set_runtime_tensor_shape("model_output", model_output.shape)
         self.action_decoder_engine.set_runtime_tensor_shape("embodiment_id", embodiment_id.shape)
+        
+        start_time = time.time()
         pred = self.action_decoder_engine(model_output, embodiment_id)["output"]
         pred_velocity = pred[:, -self.action_horizon :]
+        action_decoder_time = (time.time() - start_time) * 1000  # Convert to ms
+        if t == 0:  # Only print once to avoid spam
+            print(f"Action_Head - action_decoder: {action_decoder_time:.2f} ms FP16")
 
         # Update actions using euler integration.
         actions = actions + dt * pred_velocity
