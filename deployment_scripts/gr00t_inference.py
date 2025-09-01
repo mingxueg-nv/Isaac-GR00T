@@ -411,13 +411,13 @@ if __name__ == "__main__":
                     (component_times.get('vlln', [0])[0] + component_times.get('vl_self_attention', [0])[0])  # vlln + vl_self_attention
                 )
                 collect_pytorch_timing_data('Action_Head - process_backbone_output', process_time)
-                print(f"DEBUG: Accurate process_backbone_output time: {process_time:.2f} ms")
-                print(f"DEBUG: Breakdown - backbone: {component_times['backbone'][0]:.2f}, vit: {component_times['vision_model'][0]:.2f}, llm: {component_times['language_model'][0]:.2f}")
-            else:
-                print("DEBUG: Cannot calculate accurate process time - missing components!")
+            #     print(f"DEBUG: Accurate process_backbone_output time: {process_time:.2f} ms")
+            #     print(f"DEBUG: Breakdown - backbone: {component_times['backbone'][0]:.2f}, vit: {component_times['vision_model'][0]:.2f}, llm: {component_times['language_model'][0]:.2f}")
+            # else:
+            #     print("DEBUG: Cannot calculate accurate process time - missing components!")
             
-            # Debug: show all captured components
-            print(f"DEBUG: Captured components: {list(component_times.keys())}")
+            # # Debug: show all captured components
+            # print(f"DEBUG: Captured components: {list(component_times.keys())}")
             
             # Calculate ViT time (vision model)
             if 'vision_model' in component_times:

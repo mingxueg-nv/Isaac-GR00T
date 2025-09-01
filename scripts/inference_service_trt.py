@@ -54,7 +54,7 @@ class ArgsConfig:
     denoising_steps: int = 4
     """The number of denoising steps to use."""
     
-    trt_engine_path: str = "/mnt/Isaac-GR00T/gr00t_engine/"
+    trt_engine_path: str = "/workspace/Isaac-GR00T/gr00t_engine"
 
 
 #####################################################################################

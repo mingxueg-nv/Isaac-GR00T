@@ -45,15 +45,21 @@ bash deployment_scripts/setup_env.sh
 #### Build Container
 
 To build a container for Isaac-GR00T:
-
+## orin
 ```sh
 docker build -t isaac-gr00t-n1.5:l4t-jp6.2 -f orin.Dockerfile .
+```
+
+## thor
+```sh
+docker build -t isaac-gr00t-n1.5:l4t-jp7.0 -f thor.Dockerfile .
 ```
 
 #### Run Container
 
 To run the container:
 ```sh
+### orin
 docker run -it --rm --network=host --privileged --runtime=nvidia \
     -v /media/binliu/mxgu/Isaac-GR00T:/mnt/Isaac-GR00T \
     -v /media/binliu/BLSSD/trt/gr00t_engine:/mnt/Isaac-GR00T/gr00t_engine \
@@ -64,6 +70,16 @@ docker run -it --rm --network=host --privileged --runtime=nvidia \
     -v /media/binliu/BLSSD/checkpoints/:/mnt/Isaac-GR00T/checkpoints \
     -v /media/binliu/mxgu/so101_follower_arm.json:/root/.cache/huggingface/lerobot/calibration/robots/so101_follower/so101_follower_arm.json \
     isaac-gr00t-n1.5:l4t-jp6.2  /bin/bash
+
+```
+```sh
+### thor
+docker run --rm -it --runtime=nvidia --network=host --privileged \
+    -v "$PWD":/workspace \
+    -v /dev:/dev
+    -w /workspace isaac-gr00t-n1.5:l4t-jp7.0
+
+docker run --rm -it --runtime=nvidia --network=host --privileged   -v "$PWD":/workspace -w /workspace isaac-gr00t-n1.5:l4t-jp7.0
 ```
 
 ```sh
@@ -72,13 +88,19 @@ pip install -e ".[feetech]"
 ```
 
 ```sh
-# gr00t
-pip install -e .[orin]
+# gr00t - thor
+pip install -e .[thor]
 ```
 
 ```sh
+# gr00t - orin
+pip install -e .[orin]
+
 export PYTHONPATH=/mnt/Isaac-GR00T/gr00t/eval:$PYTHONPATH
+
 ```
+
+
 
 ```sh
 python scripts/inference_service_trt.py --server \
